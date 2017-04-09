@@ -605,9 +605,9 @@ void pvrtdecompress(AMTC_BLOCK_STRUCT *input_buf, const int is_2bpp,
 
 			// Store the result in the output image
 			unsigned int pos = (x + (y_dim - y - 1) * x_dim ) << 2;
-			result_buf[pos + 0] = (uint8_t) result[2];
+			result_buf[pos + 0] = (uint8_t) result[0];
 			result_buf[pos + 1] = (uint8_t) result[1];
-			result_buf[pos + 2] = (uint8_t) result[0];
+			result_buf[pos + 2] = (uint8_t) result[2];
 			result_buf[pos + 3] = (uint8_t) result[3];
 		}
 	}
