@@ -1,4 +1,6 @@
-#import <stdint.h>
+#ifndef HEADERFILE_P
+#define HEADERFILE_P
+#include <stdint.h>
  
 typedef struct {
     uint32_t filesz;
@@ -49,3 +51,5 @@ RGBTRIPLE;
 void pvrtdecompress(const void *input_buf, const int is_2bpp,
                     const int xmax, const int ymax,
                     unsigned char *result_buf);
+
+#endif

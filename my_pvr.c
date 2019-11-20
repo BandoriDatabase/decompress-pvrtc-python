@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
-#include "pvrtdecompress.h"
+#include "pvrdecompress.h"
 
 #define Y_BLOCK_SIZE 4
 #define X_BLOCK_SIZE 4

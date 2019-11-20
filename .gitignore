@@ -1,3 +1,5 @@
 *.dSYM
 decompress
 discarded.c
+build/
+.vscode/

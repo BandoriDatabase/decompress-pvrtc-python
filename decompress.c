@@ -1,23 +1,24 @@
 #include <stdlib.h>
 #include <stdio.h>
-#import <stdint.h>
 #include <limits.h>
 #include <math.h>
 #include <string.h>
 #include <time.h>
 #include "Python.h"
-#include "pvrtdecompress.h"
+#include "etcdec.h"
+#include "pvrdecompress.h"
 
 const uint16_t bmpfile_magic = 0x4d42;
 
-size_t get_size(FILE *fp);
 size_t bmp_init(FILE *fp, int dim);
-void write_noise(FILE *fp, int dim);
-void hex_dump(void *buffer, size_t size);
 
-static PyObject *get_bmp_from_pvr(PyObject *self, PyObject *args);
+static PyObject *get_pixel_from_pvr(PyObject *self, PyObject *args);
+static PyObject *get_pixel_from_etc1(PyObject *self, PyObject *args);
+static PyObject *get_pixel_from_etc2(PyObject *self, PyObject *args);
 static PyMethodDef module_methods[] = {
-    {"getBmpFromPvr", get_bmp_from_pvr, METH_VARARGS, "get bmp file from given pvr file"},
+    {"getPixelFromPvr", get_pixel_from_pvr, METH_VARARGS, "get pixel data from given pvr data"},
+    {"getPixelFromETC1", get_pixel_from_etc1, METH_VARARGS, "get pixel data from given etc1 data"},
+    {"getPixelFromETC2", get_pixel_from_etc2, METH_VARARGS, "get pixel data from given etc2 data"},
     {NULL, NULL, 0, NULL} 
 };
 
@@ -37,49 +38,27 @@ PyMODINIT_FUNC PyInit_pvrtcdecompress(void)
     return m;
 }
 
-// int main(int argc, char const *argv[])
-static PyObject *get_bmp_from_pvr(PyObject *self, PyObject *args)
+static PyObject *get_pixel_from_pvr(PyObject *self, PyObject *args)
 {
-    // int do_2bpp = (argv[1] && atoi(argv[1]) == 2) ? 1 : 0;
-    // char *infile_name = "img/common_rhythmBG.pvr"; // do_2bpp ? "img/firefox-2bpp.pvr" : "img/firefox-4bpp.pvr";
-    // char *outfile_name = "img/common_rhythmBG.bmp"; // do_2bpp ? "img/firefox-2bpp.bmp" : "img/firefox-4bpp.bmp";
     
     Py_buffer py_inbuffer;
     int dim;
     
     if(!PyArg_ParseTuple(args, "s*i", &py_inbuffer, &dim))
         return NULL;
-    
-    // Initialize infile
-    // FILE *infile = fopen(infile_name, "rb");
-    // size_t insize = get_size(infile);
-    void *inbuffer = py_inbuffer.buf; // malloc(insize * sizeof(char));
+
+    void *inbuffer = py_inbuffer.buf;
     
     // Initialize outfile
-    // FILE *outfile = fopen(outfile_name, "wb");
     void *outfile = malloc(sizeof(bmpfile_magic) + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
     FILE *foutfile = fmemopen(outfile, sizeof(bmpfile_magic) + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER), "w");
     size_t outsize = bmp_init(foutfile, dim);
     fclose(foutfile);
     void *outbuffer = malloc(outsize * sizeof(char));
-                
-    // fread(inbuffer, 1, insize, infile); 
 
-    // printf("inbuffer: %x %x\n\n", inbuffer, inbuffer + insize);
     pvrtdecompress(inbuffer, 0, dim, dim, (unsigned char *) outbuffer);
 
-    // hex_dump(outbuffer, outsize);
-
-    // fwrite(outbuffer, 1, outsize, outfile);
-        
-    // fclose(infile);
-    // fclose(outfile);
-    
-    // free(inbuffer);
-    //void *py_outbuffer = malloc(sizeof(bmpfile_magic) + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + outsize * sizeof(char));
     void *py_outbuffer = malloc(outsize * sizeof(char));
-    //memcpy(py_outbuffer, outfile, sizeof(bmpfile_magic) + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
-    //memcpy(py_outbuffer + sizeof(bmpfile_magic) + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER), outbuffer, outsize * sizeof(char));
     memcpy(py_outbuffer, outbuffer, outsize * sizeof(char));
     PyObject *result;
     result = Py_BuildValue("y#", (char *)py_outbuffer,outsize * sizeof(char));
@@ -90,15 +69,107 @@ static PyObject *get_bmp_from_pvr(PyObject *self, PyObject *args)
     free(outfile);
     
     return result;
-	// return 0;
 }
 
-size_t get_size(FILE* fp)
+static PyObject *get_pixel_from_etc1(PyObject *self, PyObject *args)
 {
-    fseek(fp, 0, SEEK_END);
-    size_t size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    return size;
+    Py_buffer py_inbuf;
+    int width, height, channels;
+
+    if(!PyArg_ParseTuple(args, "s*iii", &py_inbuf, &width, &height, &channels))
+        return NULL;
+
+    // check buffer size
+    if(py_inbuf.len != width*height/2) return NULL;
+    FILE *infile = fmemopen(py_inbuf.buf, py_inbuf.len, "r");
+    if(infile == NULL) return NULL;
+
+    int bytesRead = 0, startx = 0, starty = 0;
+    uint8 img[width*height*channels];
+
+    while(bytesRead != py_inbuf.len) {
+        unsigned int block_part1 = read_big_endian_4byte_word(infile);
+        unsigned int block_part2 = read_big_endian_4byte_word(infile);
+        bytesRead += 8;
+
+        decompressBlockDiffFlipC(block_part1, block_part2, &img[0], width, height, startx, starty, channels);
+        startx += 4;
+        if(startx > width) {
+            startx = startx % width;
+            starty += 4;
+        }
+    }
+
+    PyObject *py_outbuf = Py_BuildValue("y#", img, width*height*channels);
+
+    PyBuffer_Release(&py_inbuf);
+
+    return py_outbuf;
+}
+
+static PyObject *get_pixel_from_etc2(PyObject *self, PyObject *args)
+{
+    Py_buffer py_inbuf;
+    int width, height, channels, alpha_block_flag;
+
+    if(!PyArg_ParseTuple(args, "s*iiip", &py_inbuf, &width, &height, &channels, &alpha_block_flag))
+        return NULL;
+
+    // check buffer size
+    if(alpha_block_flag) {
+        if(py_inbuf.len != width*height) return NULL;
+        setupAlphaTable();
+    } else {
+        if(py_inbuf.len != width*height/2) return NULL;
+    }
+    FILE *infile = fmemopen(py_inbuf.buf, py_inbuf.len, "r");
+    if(infile == NULL) return NULL;
+
+    int bytesRead = 0, startx = 0, starty = 0;
+    uint8 *img_color = malloc(width*height*channels);
+    uint8 *img_alpha = malloc(width*height);
+
+    while(bytesRead != py_inbuf.len) {
+        if(alpha_block_flag) {
+            uint8 alpha_data[8];
+            fread(&alpha_data[0], 1, 8, infile);
+            decompressBlockAlpha(alpha_data, &img_alpha[0], width, height, startx, starty);
+            bytesRead += 8;
+        }
+        unsigned int block_part1 = read_big_endian_4byte_word(infile);
+        unsigned int block_part2 = read_big_endian_4byte_word(infile);
+        bytesRead += 8;
+
+        decompressBlockETC2(block_part1, block_part2, &img_color[0], width, height, startx, starty);
+        startx += 4;
+        if(startx > width) {
+            startx = startx % width;
+            starty += 4;
+        }
+    }
+
+    uint8 *img;
+    if(alpha_block_flag) {
+        uint8 *img_data = malloc(width*height*(channels+1));
+        img = img_data;
+        for(int i = 0; i < width*height; i++) {
+            for(int j = 0; j < channels; j++) {
+                img_data[i*(channels+1)+j] = img_color[i*channels+j];
+            }
+            img_data[i*(channels+1)+channels] = img_alpha[i];
+        }
+        free(img_data);
+    } else {
+        img = img_color;
+    }
+
+    PyObject *py_outbuf = Py_BuildValue("y#", img, width*height*(channels+alpha_block_flag));
+
+    PyBuffer_Release(&py_inbuf);
+    free(img_color);
+    free(img_alpha);
+
+    return py_outbuf;
 }
 
 size_t bmp_init(FILE *fp, int dim)
@@ -132,27 +203,4 @@ size_t bmp_init(FILE *fp, int dim)
     fwrite(&bi, sizeof(BITMAPINFOHEADER), 1, fp);
     
     return (size_t) bi.bmp_bytesz;
-}
-
-void write_noise(FILE *fp, int dim)
-{
-    srand(time(NULL));
-    for (int i = 0; i < dim; i++) {
-        for (int j = 0; j < dim; j++) {
-            char r = rand() % 255;
-            char g = rand() % 255;
-            char b = rand() % 255;
-            char a = rand() % 255;
-            RGBQUAD pixel = {b, g, r, a};
-            fwrite(&pixel, sizeof(RGBQUAD), 1, fp);
-        }
-    }    
-}
-
-void hex_dump(void *buffer, size_t size)
-{
-    for (int i = 0; i < (int) size; i++) {
-        printf("%x ", *((char *) buffer + i));
-    }
-    printf("\n");   
 }
